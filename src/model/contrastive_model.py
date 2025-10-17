@@ -132,8 +132,6 @@ class ContrastiveModel(nn.Module):
         # Provide sensible defaults from model config if not explicitly provided
         if 'nhead' not in aug_kwargs:
             aug_kwargs['nhead'] = nhead
-        if 'tcn_kernel_size' not in aug_kwargs:
-            aug_kwargs['tcn_kernel_size'] = tcn_kernel_size
         if 'num_layers' not in aug_kwargs:
             # Default augmentation transformer num layers = 1 unless overridden
             aug_kwargs['num_layers'] = 1

@@ -49,10 +49,8 @@ Input Data (Original + Augmented)
 
 **Kiến trúc**:
 - **LinearAugmentation**: Linear layer với GELU activation
+- **MLPAugmentation**: Multi-layer perceptron với feature flattening
 - **CNNAugmentation**: 1D CNN với kernel size có thể điều chỉnh
-- **TCNAugmentation**: Temporal Convolutional Network (stacked convs, không dilation)
-- **LSTMAugmentation**: LSTM layer
-- **EncoderTransformerAugmentation**: Single-layer Transformer Encoder
 
 **Cách hoạt động**:
 ```python
@@ -451,13 +449,11 @@ def adjustment(gt, pred):
 **Augmentation**:
 - `aug_nhead`: Nhead cho augmentation transformer (default: 2)
 - `aug_num_layers`: Số layers cho augmentation transformer (default: 1)
-- `aug_tcn_kernel_size`: Kernel size cho augmentation TCN (default: 3)
-- `aug_tcn_num_layers`: Số layers cho augmentation TCN (default: 1)
 
 ## Điểm mạnh của Kiến trúc
 
 1. **Multi-scale Feature Learning**: Kết hợp TCN (local patterns) và Transformer (global dependencies)
-2. **Robust Augmentation**: 5 loại augmentation khác nhau với learned combination weights
+2. **Robust Augmentation**: 3 loại augmentation khác nhau với learned combination weights
 3. **Contrastive Learning**: Học biểu diễn robust bằng cách so sánh positive/negative pairs
 4. **Reconstruction Constraint**: Đảm bảo model không chỉ học contrastive mà còn có thể reconstruct
 5. **Flexible Architecture**: Có thể điều chỉnh cho nhiều loại dataset khác nhau

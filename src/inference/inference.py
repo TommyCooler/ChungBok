@@ -171,8 +171,8 @@ class ContrastiveInference:
         combination_method = checkpoint.get('combination_method', 'concat')
         use_contrastive = checkpoint.get('use_contrastive', True)
         
-        # Decoder parameters (fallback to defaults if not in checkpoint)
-        decoder_type = checkpoint.get('decoder_type', 'custom_linear')
+        # Decoder type is always custom_linear
+        decoder_type = 'custom_linear'
         
         # Load window_size from checkpoint if available
         self.window_size = checkpoint.get('window_size', 16)
@@ -1328,22 +1328,9 @@ def main():
             with open(config_path, 'r') as f:
                 config = json.load(f)
             additional_info = {
-                'Decoder_Type': config.get('decoder_type', 'Unknown'),
-                'Decoder_Hidden_Dims': config.get('decoder_hidden_dims', 'Unknown'),
-                'Decoder_TCN_Kernel_Size': config.get('decoder_tcn_kernel_size', 'Unknown'),
-                'Decoder_TCN_Num_Layers': config.get('decoder_tcn_num_layers', 'Unknown'),
-                'Decoder_Transformer_Nhead': config.get('decoder_transformer_nhead', 'Unknown'),
-                'Decoder_Transformer_Num_Layers': config.get('decoder_transformer_num_layers', 'Unknown'),
-                'Decoder_Dim_Feedforward': config.get('decoder_dim_feedforward', 'Unknown'),
-                'Decoder_Hybrid_TCN_Kernel_Size': config.get('decoder_hybrid_tcn_kernel_size', 'Unknown'),
-                'Decoder_Hybrid_TCN_Num_Layers': config.get('decoder_hybrid_tcn_num_layers', 'Unknown'),
-                'Decoder_Hybrid_Transformer_Nhead': config.get('decoder_hybrid_transformer_nhead', 'Unknown'),
-                'Decoder_Hybrid_Transformer_Num_Layers': config.get('decoder_hybrid_transformer_num_layers', 'Unknown'),
-                'Decoder_Hybrid_Dim_Feedforward': config.get('decoder_hybrid_dim_feedforward', 'Unknown'),
+                'Decoder_Type': 'custom_linear',
                 'Aug_nhead': config.get('aug_nhead', 'Unknown'),
                 'Aug_num_layers': config.get('aug_num_layers', 'Unknown'),
-                'Aug_tcn_kernel_size': config.get('aug_tcn_kernel_size', 'Unknown'),
-                'Aug_tcn_num_layers': config.get('aug_tcn_num_layers', 'Unknown'),
                 'Aug_dropout': config.get('aug_dropout', 'Unknown'),
                 'Aug_temperature': config.get('aug_temperature', 'Unknown'),
                 'Learning_Rate': config.get('learning_rate', 'Unknown'),

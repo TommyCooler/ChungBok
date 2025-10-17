@@ -54,19 +54,13 @@ def parse_args():
                        choices=['concat', 'stack'],
                        help='Method for combining TCN and Transformer outputs')
     
-    # Decoder arguments (simplified - only CustomLinear)
-    parser.add_argument('--decoder_type', type=str, default='custom_linear',
-                       help='Decoder type (always custom_linear)')
+    # Decoder is always custom_linear
 
     # Augmentation-specific overrides (distinct names to avoid confusion with encoder)
     parser.add_argument('--aug_nhead', type=int, default=2,
                        help='Augmentation transformer nhead (override; default: model nhead)')
     parser.add_argument('--aug_num_layers', type=int, default=1,
                        help='Augmentation transformer number of layers')
-    parser.add_argument('--aug_tcn_kernel_size', type=int, default=3,
-                       help='Augmentation TCN kernel size (override; default: model tcn_kernel_size)')
-    parser.add_argument('--aug_tcn_num_layers', type=int, default=1,
-                       help='Augmentation TCN number of layers')
     parser.add_argument('--aug_dropout', type=float, default=0.01,
                        help='Augmentation dropout (override; default: model dropout)')
     parser.add_argument('--aug_temperature', type=float, default=None,
@@ -113,7 +107,7 @@ def parse_args():
 # Augmentation is handled by the model, not in dataloader
     
     # LR scheduler arguments
-    parser.add_argument('--use_lr_scheduler', action='store_true', default=True,
+    parser.add_argument('--use_lr_scheduler', action='store_true', default=False,
                        help='Use learning rate scheduler')
     parser.add_argument('--scheduler_type', type=str, default='cosine',
                        choices=['cosine', 'step', 'exponential', 'plateau'],
@@ -215,7 +209,7 @@ def main():
     print(f"Window size: {args.window_size}")
     print(f"Batch size: {args.batch_size}")
     print(f"Number of epochs: {args.num_epochs}")
-    print(f"Decoder type: {args.decoder_type}")
+    print(f"Decoder type: custom_linear")
     print(f"Use contrastive: {args.use_contrastive}")
     print(f"Use wandb: {args.use_wandb}")
     print(f"Device: {device}")
@@ -282,8 +276,6 @@ def main():
             augmentation_kwargs={
                 # Only pass if provided; ContrastiveModel will fallback to model params
                 **({ 'nhead': args.aug_nhead } if args.aug_nhead is not None else {}),
-                **({ 'tcn_kernel_size': args.aug_tcn_kernel_size } if args.aug_tcn_kernel_size is not None else {}),
-                **({ 'tcn_num_layers': args.aug_tcn_num_layers } if args.aug_tcn_num_layers is not None else {}),
                 'num_layers': args.aug_num_layers,
                 **({ 'dropout': args.aug_dropout } if args.aug_dropout is not None else {}),
                 **({ 'temperature': args.aug_temperature } if args.aug_temperature is not None else {}),
