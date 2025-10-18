@@ -10,7 +10,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # Import custom modules
-from src.modules.agf_encoder.agf_tcn import Agf_TCN
+from ..modules.agf_encoder.agf_tcn import Agf_TCN
 from src.modules.encoder import Encoder
 from src.modules.decoder import Decoder
 from src.modules.augmentation import Augmentation
@@ -126,12 +126,14 @@ class ContrastiveModel(nn.Module):
         # Apply augmentation to the data
         augmented_data = self.augmentation(augmented_data)
         
-        # Encode both original and augmented data
-        # original_encoded = self.encoder(original_data)  # (batch_size, seq_len, d_model)
-        # augmented_encoded = self.encoder(augmented_data)  # (batch_size, seq_len, d_model)
+        # Transpose input for AGF: (batch_size, seq_len, input_dim) -> (batch_size, input_dim, seq_len)
+        augmented_data_transposed = augmented_data.transpose(1, 2)
         
-        # original_encoded = self.agf(original_encoded)
-        augmented_afg = self.agf(augmented_data)
+        # Apply AGF
+        augmented_afg = self.agf(augmented_data_transposed)
+        
+        # Transpose back: (batch_size, input_dim, seq_len) -> (batch_size, seq_len, input_dim)
+        augmented_afg = augmented_afg.transpose(1, 2)
         
         # Reconstruct original data from augmented encoding
         # reconstructed = self.decoder(augmented_encoded)  # (batch_size, seq_len, input_dim)

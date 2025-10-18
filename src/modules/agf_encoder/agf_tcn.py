@@ -206,11 +206,10 @@ class Agf_TCN(nn.Module):
     #         return nn.Linear(dims, 128)
     #     else: return None
 
-    def forward(self, x, generated_labels):
-        if self.mode=="train":
-            x = self.network(x)   #encoder
-            x = self.decoder(x)     #reconstruction
-            return x
+    def forward(self, x):
+        x = self.network(x)   #encoder
+        x = self.decoder(x)     #reconstruction
+        return x
 
 # if __name__ == '__main__':
 #     pass
