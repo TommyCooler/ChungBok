@@ -2,11 +2,9 @@ import torch
 import torch.nn as nn
 from sympy.codegen.fnodes import intent_out
 from torch.nn.utils import weight_norm
-from basicBlock import CustomLinear
-from FusionBlock import MulFusion, AvgFusion, ConcatFusion, AddFusion, \
+from .basicBlock import CustomLinear
+from .FusionBlock import MulFusion, AvgFusion, ConcatFusion, AddFusion, \
     TripConFusion
-
-from Journals.JMLR2025.caf_tcn.modules.iat_net import IATNet
 
 
 class SEBlock(nn.Module):
@@ -196,7 +194,7 @@ class Agf_TCN(nn.Module):
 
         #reconstruction
         self.decoder = CustomLinear(input_shape=(num_channels[-1], window_size),
-                                       output_shape=(num_inputs, 1))
+                                       output_shape=(num_inputs, window_size)) # change from 1 to window_size
 
         #contrastive learning
         # self.mlp = self._contrastive_mode_setting(mode,num_inputs)
