@@ -249,6 +249,7 @@ def main():
         print(f"\nStarting training...")
         trainer.train(
             num_epochs=args.num_epochs,
+            save_best=True  # Save best model when loss improves
         )
         
         # Plot training history
@@ -257,7 +258,7 @@ def main():
         
         # Save final model
         final_checkpoint_path = os.path.join(save_dir, 'final_model.pth')
-        trainer.save_checkpoint(current_loss=None)
+        # trainer.save_checkpoint(current_loss=None)
         print(f"\nFinal model saved to {final_checkpoint_path}")
         
         print("\nTraining completed successfully!")

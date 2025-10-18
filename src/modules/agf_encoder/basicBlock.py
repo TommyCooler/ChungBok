@@ -40,12 +40,20 @@ class CustomLinear(nn.Module):
 
 
     def forward(self, x):
+        # print(f"CustomLinear forward - input shape: {x.shape}, i_shape: {self.i_shape}, o_shape: {self.o_shape}")
+        # print(f"  weights1: {self.weights1.shape}, bias1: {self.bias1.shape}")
         if (self.o_shape[1] != self.i_shape[1]):
+            # print(f"  Using two-step transformation (different sequence lengths)")
+            # print(f"  weights2: {self.weights2.shape}, bias2: {self.bias2.shape}")
             x = torch.add(torch.matmul(self.weights1, x ), self.bias1)
+            # print(f"  After first matmul+bias: {x.shape}")
             x = torch.add(torch.matmul(x, self.weights2 ), self.bias2)
+            # print(f"  After second matmul+bias: {x.shape}")
             return x
 
+        # print(f"  Using single-step transformation (same sequence length)")
         x = torch.add(torch.matmul(self.weights1, x ), self.bias1)
+        # print(f"  After matmul+bias: {x.shape}")
         return x
 
 
@@ -70,7 +78,7 @@ class CustomNonLinear(nn.Module):
 
         if (output_shape[1] == input_shape[1]):
             self.weights1 = nn.Parameter(torch.Tensor(output_shape[0], input_shape[0]))
-            self.bias1 = nn.Parameter(torch.Tensor(output_shape[1], output_shape[1]))
+            self.bias1 = nn.Parameter(torch.Tensor(output_shape[0], output_shape[1]))
             # nn.init.kaiming_uniform_(self.weights,  a=math.sqrt(5)) # weight init
             nn.init.normal_(self.weights1, mean=0.0, std=0.01)
             fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weights1)

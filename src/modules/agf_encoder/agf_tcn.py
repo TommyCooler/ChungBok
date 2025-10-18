@@ -193,8 +193,9 @@ class Agf_TCN(nn.Module):
         self.network = nn.Sequential(*self.layers)
 
         #reconstruction
+        # print(f"AGF_TCN decoder config: input_shape=({num_channels[-1]}, {window_size}), output_shape=({num_inputs}, {window_size})")
         self.decoder = CustomLinear(input_shape=(num_channels[-1], window_size),
-                                       output_shape=(num_inputs, window_size)) # change from 1 to window_size
+                                       output_shape=(num_inputs, window_size))
 
         #contrastive learning
         # self.mlp = self._contrastive_mode_setting(mode,num_inputs)

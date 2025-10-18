@@ -58,6 +58,10 @@ class ContrastiveTrainer:
         self.train_losses = []
         self.reconstruction_losses = []
         
+        # Best loss tracking for checkpointing
+        self.best_loss = float('inf')
+        self.best_epoch = 0
+        
     def train_epoch(self) -> Dict[str, float]:
         """Train for one epoch"""
         self.model.train()
@@ -118,7 +122,7 @@ class ContrastiveTrainer:
             'reconstruction_loss': avg_reconstruction_loss
         }
     
-    def train(self, num_epochs: int = 100, save_every: int = 10):
+    def train(self, num_epochs: int = 100, save_best: bool = True):
         """Train the model for multiple epochs"""
         print(f"Starting training for {num_epochs} epochs...")
         print(f"Device: {self.device}")
@@ -134,33 +138,40 @@ class ContrastiveTrainer:
             
             # Train one epoch
             epoch_losses = self.train_epoch()
+            current_loss = epoch_losses['total_loss']
             
             # Store losses
-            self.train_losses.append(epoch_losses['total_loss'])
+            self.train_losses.append(current_loss)
             self.reconstruction_losses.append(epoch_losses['reconstruction_loss'])
             
             epoch_time = time.time() - epoch_start_time
             
             # Update progress bar with current losses
             epoch_pbar.set_postfix({
-                'Total Loss': f'{epoch_losses["total_loss"]:.6f}',
+                'Total Loss': f'{current_loss:.6f}',
                 'Recon Loss': f'{epoch_losses["reconstruction_loss"]:.6f}',
+                'Best Loss': f'{self.best_loss:.6f}',
                 'Time': f'{epoch_time:.2f}s'
             })
             
-            # Save checkpoint
-            if (epoch + 1) % save_every == 0:
-                self.save_checkpoint(epoch + 1)
+            # Save best model if loss improved
+            if save_best and current_loss < self.best_loss:
+                old_best_loss = self.best_loss
+                self.best_loss = current_loss
+                self.best_epoch = epoch + 1
+                print(f"\n🎉 New best loss: {current_loss:.6f} (improvement from {old_best_loss:.6f})")
+                self.save_checkpoint(epoch + 1, is_best=True)
         
         epoch_pbar.close()
         
         total_time = time.time() - start_time
         print(f"Training completed in {total_time:.2f}s")
+        print(f"Best loss: {self.best_loss:.6f} at epoch {self.best_epoch}")
         
         # Save final checkpoint
         self.save_checkpoint(num_epochs, is_final=True)
     
-    def save_checkpoint(self, epoch: int, is_final: bool = False):
+    def save_checkpoint(self, epoch: int, is_final: bool = False, is_best: bool = False):
         """Save model checkpoint"""
         checkpoint = {
             'epoch': epoch,
@@ -168,6 +179,8 @@ class ContrastiveTrainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'train_losses': self.train_losses,
             'reconstruction_losses': self.reconstruction_losses,
+            'best_loss': self.best_loss,
+            'best_epoch': self.best_epoch,
             'model_config': {
                 'input_dim': self.model.input_dim,
                 'd_model': self.model.d_model,
@@ -179,13 +192,17 @@ class ContrastiveTrainer:
             }
         }
         
-        if is_final:
+        if is_best:
+            checkpoint_path = os.path.join(self.save_dir, 'best_model.pth')
+            print(f"🏆 Best model saved to {checkpoint_path} (loss: {self.best_loss:.6f})")
+        elif is_final:
             checkpoint_path = os.path.join(self.save_dir, 'final_checkpoint.pth')
+            print(f"Final checkpoint saved to {checkpoint_path}")
         else:
             checkpoint_path = os.path.join(self.save_dir, f'checkpoint_epoch_{epoch}.pth')
+            print(f"Checkpoint saved to {checkpoint_path}")
         
         torch.save(checkpoint, checkpoint_path)
-        print(f"Checkpoint saved to {checkpoint_path}")
     
     def load_checkpoint(self, checkpoint_path: str):
         """Load model checkpoint"""
