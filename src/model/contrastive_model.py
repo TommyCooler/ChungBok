@@ -10,6 +10,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # Import custom modules
+from src.modules.agf_encoder.agf_tcn import Agf_TCN
 from src.modules.encoder import Encoder
 from src.modules.decoder import Decoder
 from src.modules.augmentation import Augmentation
@@ -90,6 +91,16 @@ class ContrastiveModel(nn.Module):
             dropout=dropout
         )
         
+        self.agf = Agf_TCN(
+            num_inputs=input_dim,
+            num_channels=stacked_tcn_channels,
+            dropout=dropout,
+            activation=stacked_tcn_activation,
+            fuse_type=1,
+            window_size=window_size,
+        )
+        
+        
         # Augmentation module for data augmentation
         self.augmentation = Augmentation(
             input_dim=input_dim,
@@ -116,16 +127,20 @@ class ContrastiveModel(nn.Module):
         augmented_data = self.augmentation(augmented_data)
         
         # Encode both original and augmented data
-        original_encoded = self.encoder(original_data)  # (batch_size, seq_len, d_model)
-        augmented_encoded = self.encoder(augmented_data)  # (batch_size, seq_len, d_model)
+        # original_encoded = self.encoder(original_data)  # (batch_size, seq_len, d_model)
+        # augmented_encoded = self.encoder(augmented_data)  # (batch_size, seq_len, d_model)
+        
+        # original_encoded = self.agf(original_encoded)
+        augmented_afg = self.agf(augmented_data)
         
         # Reconstruct original data from augmented encoding
-        reconstructed = self.decoder(augmented_encoded)  # (batch_size, seq_len, input_dim)
+        # reconstructed = self.decoder(augmented_encoded)  # (batch_size, seq_len, input_dim)
         
         return {
-            'original_encoded': original_encoded,
-            'augmented_encoded': augmented_encoded,
-            'reconstructed': reconstructed
+            # 'original_encoded': original_encoded,
+            # 'augmented_encoded': augmented_encoded,
+            'augmented_afg': augmented_afg,
+            # 'reconstructed': reconstructed
         }
     
     def compute_reconstruction_loss(self, 
@@ -164,7 +179,7 @@ class ContrastiveModel(nn.Module):
         # Compute reconstruction loss
         reconstruction_loss = self.compute_reconstruction_loss(
             original_data,
-            outputs['reconstructed']
+            outputs['augmented_afg']
         )
         
         # Total loss

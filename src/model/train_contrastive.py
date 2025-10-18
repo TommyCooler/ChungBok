@@ -201,6 +201,59 @@ class ContrastiveTrainer:
         
         print(f"Checkpoint loaded from {checkpoint_path}")
         return checkpoint['epoch']
+    
+    def plot_training_history(self, save_path: Optional[str] = None):
+        """Plot training history"""
+        # Check if we have data to plot
+        if not self.train_losses and not self.reconstruction_losses:
+            print("No training data available to plot.")
+            return
+        
+        # Create subplots based on available data
+        if self.train_losses and self.reconstruction_losses:
+            fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+            
+            # Total loss
+            axes[0].plot(self.train_losses, label='Train', color='blue')
+            axes[0].set_title('Total Loss')
+            axes[0].set_xlabel('Epoch')
+            axes[0].set_ylabel('Loss')
+            axes[0].legend()
+            axes[0].grid(True)
+            
+            # Reconstruction loss
+            axes[1].plot(self.reconstruction_losses, label='Train', color='orange')
+            axes[1].set_title('Reconstruction Loss')
+            axes[1].set_xlabel('Epoch')
+            axes[1].set_ylabel('Loss')
+            axes[1].legend()
+            axes[1].grid(True)
+            
+        elif self.train_losses:
+            fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+            ax.plot(self.train_losses, label='Train', color='blue')
+            ax.set_title('Total Loss')
+            ax.set_xlabel('Epoch')
+            ax.set_ylabel('Loss')
+            ax.legend()
+            ax.grid(True)
+            
+        elif self.reconstruction_losses:
+            fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+            ax.plot(self.reconstruction_losses, label='Train', color='orange')
+            ax.set_title('Reconstruction Loss')
+            ax.set_xlabel('Epoch')
+            ax.set_ylabel('Loss')
+            ax.legend()
+            ax.grid(True)
+        
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"Training history plot saved to {save_path}")
+        
+        plt.show()
 
 
 def create_contrastive_dataloaders(dataset_type: str,
@@ -261,50 +314,3 @@ def create_contrastive_dataloaders(dataset_type: str,
     
     
     return train_dataloader, None
-
-def plot_training_history(self, save_path: Optional[str] = None):
-        """Plot training history"""
-        _, axes = plt.subplots(2, 2, figsize=(15, 10))
-        
-        # Total loss
-        axes[0, 0].plot(self.train_losses, label='Train', color='blue')
-        axes[0, 0].set_title('Total Loss')
-        axes[0, 0].set_xlabel('Epoch')
-        axes[0, 0].set_ylabel('Loss')
-        axes[0, 0].legend()
-        axes[0, 0].grid(True)
-        
-        # Contrastive loss
-        axes[0, 1].plot(self.contrastive_losses, label='Train', color='green')
-        axes[0, 1].set_title('Contrastive Loss')
-        axes[0, 1].set_xlabel('Epoch')
-        axes[0, 1].set_ylabel('Loss')
-        axes[0, 1].legend()
-        axes[0, 1].grid(True)
-        
-        # Reconstruction loss
-        axes[1, 0].plot(self.reconstruction_losses, label='Train', color='orange')
-        axes[1, 0].set_title('Reconstruction Loss')
-        axes[1, 0].set_xlabel('Epoch')
-        axes[1, 0].set_ylabel('Loss')
-        axes[1, 0].legend()
-        axes[1, 0].grid(True)
-        
-        # Learning rate
-        if self.scheduler is not None:
-            LEARNING_RATE_LABEL = 'Learning Rate'
-            lr_history = [self.scheduler.get_last_lr()[0] for _ in range(len(self.train_losses))]
-            axes[1, 1].plot(lr_history, label=LEARNING_RATE_LABEL, color='purple')
-            axes[1, 1].set_title(LEARNING_RATE_LABEL)
-            axes[1, 1].set_xlabel('Epoch')
-            axes[1, 1].set_ylabel(LEARNING_RATE_LABEL)
-            axes[1, 1].legend()
-            axes[1, 1].grid(True)
-        
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"Training history plot saved to {save_path}")
-        
-        plt.show()
