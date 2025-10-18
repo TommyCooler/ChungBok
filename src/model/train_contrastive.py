@@ -1,22 +1,12 @@
+import os
 import torch
-import torch.nn as nn
-import torch.optim as optim
 from torch.utils.data import DataLoader
-import numpy as np
+from typing import Dict, Tuple, Optional
+import time
+from .contrastive_model import ContrastiveModel, ContrastiveDataset
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-import os
-import sys
-from datetime import datetime
-from typing import Dict, List, Tuple, Optional
-import wandb
-
-# Add project root to path for imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-# Import custom modules
-from src.model.contrastive_model import ContrastiveModel, ContrastiveDataset
-from src.utils.dataloader import create_dataloaders
+from ..utils.dataloader import create_dataloaders
 
 
 class ContrastiveTrainer:
@@ -27,17 +17,9 @@ class ContrastiveTrainer:
                  train_dataloader: DataLoader,
                  learning_rate: float = 1e-4,
                  weight_decay: float = 1e-5,
-                 contrastive_weight: float = 1.0,
                  reconstruction_weight: float = 1.0,
-                 epsilon: float = 1e-5,
                  device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
                  save_dir: str = 'checkpoints',
-                 use_wandb: bool = False,
-                 project_name: str = 'contrastive-learning',
-                 experiment_name: str = None,
-                 use_lr_scheduler: bool = False,
-                 scheduler_type: str = 'cosine',
-                 scheduler_params: Optional[Dict] = None,
                  window_size: int = None):
         """
         Args:
@@ -45,385 +27,180 @@ class ContrastiveTrainer:
             train_dataloader: Training dataloader
             learning_rate: Learning rate for optimizer
             weight_decay: Weight decay for optimizer
-            contrastive_weight: Weight for contrastive loss
             reconstruction_weight: Weight for reconstruction loss
-            epsilon: Small constant for numerical stability in contrastive loss
             device: Device to run training on
             save_dir: Directory to save checkpoints
-            use_wandb: Whether to use wandb for logging
-            project_name: Wandb project name
-            experiment_name: Wandb experiment name
-            use_lr_scheduler: Whether to use learning rate scheduler
-            scheduler_type: Type of scheduler ('cosine', 'step', 'exponential', 'plateau')
-            scheduler_params: Additional parameters for scheduler
             window_size: Window size for training
         """
-        # Force CUDA usage for training
-        self.model = model.to('cuda')
+        self.model = model
         self.train_dataloader = train_dataloader
-        self.device = 'cuda'
+        self.device = device
         self.save_dir = save_dir
-        self.use_wandb = use_wandb
         self.window_size = window_size
         
-        # Loss weights
-        self.contrastive_weight = contrastive_weight
-        self.reconstruction_weight = reconstruction_weight
-        self.epsilon = epsilon
+        # Move model to device
+        self.model.to(self.device)
         
         # Optimizer
-        self.optimizer = optim.AdamW(
+        self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=learning_rate,
             weight_decay=weight_decay
         )
         
-        # Learning rate scheduler setup
-        self.use_lr_scheduler = use_lr_scheduler
-        self.scheduler_type = scheduler_type
-        self.scheduler_params = scheduler_params or {}
-        self.scheduler = None
-        
-        if self.use_lr_scheduler:
-            self._setup_scheduler()
-        
-        # Training history
-        self.train_losses = []
-        self.contrastive_losses = []
-        self.reconstruction_losses = []
-        
-        # Best loss tracking for checkpoint saving
-        self.best_loss = float('inf')
+        # Loss weights
+        self.reconstruction_weight = reconstruction_weight
         
         # Create save directory
         os.makedirs(save_dir, exist_ok=True)
         
-        # Initialize wandb
-        if self.use_wandb:
-            if experiment_name is None:
-                experiment_name = f"contrastive_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            
-            # Set wandb API key
-            os.environ["WANDB_API_KEY"] = "6170f251a03ea565bfa34cb8658f5a5e12a93ddd"
-            
-            wandb.init(
-                project=project_name,
-                name=experiment_name,
-                resume="allow",
-                config={
-                    'learning_rate': learning_rate,
-                    'weight_decay': weight_decay,
-                    'contrastive_weight': contrastive_weight,
-                    'reconstruction_weight': reconstruction_weight,
-                    'epsilon': epsilon,
-                    'device': device,
-                    'model_params': sum(p.numel() for p in model.parameters()),
-                    'train_batches': len(train_dataloader),
-                }
-            )
-    
-    def _setup_scheduler(self):
-        """Setup learning rate scheduler based on type"""
-        if self.scheduler_type == 'cosine':
-            # Cosine annealing scheduler
-            t_max = self.scheduler_params.get('T_max', 100)
-            eta_min = self.scheduler_params.get('eta_min', 1e-6)
-            self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
-                self.optimizer,
-                T_max=t_max,
-                eta_min=eta_min
-            )
-            
-        elif self.scheduler_type == 'step':
-            # Step scheduler
-            step_size = self.scheduler_params.get('step_size', 30)
-            gamma = self.scheduler_params.get('gamma', 0.1)
-            self.scheduler = optim.lr_scheduler.StepLR(
-                self.optimizer,
-                step_size=step_size,
-                gamma=gamma
-            )
-            
-        elif self.scheduler_type == 'exponential':
-            # Exponential scheduler
-            gamma = self.scheduler_params.get('gamma', 0.95)
-            self.scheduler = optim.lr_scheduler.ExponentialLR(
-                self.optimizer,
-                gamma=gamma
-            )
-            
-        elif self.scheduler_type == 'plateau':
-            # Reduce on plateau scheduler
-            mode = self.scheduler_params.get('mode', 'min')
-            factor = self.scheduler_params.get('factor', 0.5)
-            patience = self.scheduler_params.get('patience', 10)
-            threshold = self.scheduler_params.get('threshold', 1e-4)
-            self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-                self.optimizer,
-                mode=mode,
-                factor=factor,
-                patience=patience,
-                threshold=threshold
-            )
-            
-        else:
-            raise ValueError(f"Unknown scheduler type: {self.scheduler_type}")
-    
-    def get_current_lr(self) -> float:
-        """Get current learning rate"""
-        if self.scheduler is not None:
-            return self.scheduler.get_last_lr()[0]
-        else:
-            return self.optimizer.param_groups[0]['lr']
-    
-    def update_lr_scheduler(self, metric: Optional[float] = None):
-        """Update learning rate scheduler"""
-        if self.scheduler is not None:
-            if self.scheduler_type == 'plateau' and metric is not None:
-                self.scheduler.step(metric)
-            else:
-                self.scheduler.step()
-    
+        # Training history
+        self.train_losses = []
+        self.reconstruction_losses = []
+        
     def train_epoch(self) -> Dict[str, float]:
         """Train for one epoch"""
         self.model.train()
+        
         total_loss = 0.0
-        total_contrastive_loss = 0.0
         total_reconstruction_loss = 0.0
         num_batches = 0
         
-        pbar = tqdm(
-            self.train_dataloader,
-            desc="Training",
-            position=0,
-            leave=False,
-            dynamic_ncols=True
-        )
-        for original_batch, augmented_batch in pbar:
-            # Move to device
-            original_batch = original_batch.to(self.device)
-            augmented_batch = augmented_batch.to(self.device)
+        # Create progress bar for batches
+        batch_pbar = tqdm(self.train_dataloader, desc="Epoch", leave=False, unit="batch")
+        
+        for batch_idx, (original_data, augmented_data) in enumerate(batch_pbar):
+            # Move data to device
+            original_data = original_data.to(self.device)
+            augmented_data = augmented_data.to(self.device)
             
             # Zero gradients
             self.optimizer.zero_grad()
             
-            # Forward pass
-            self.model(original_batch, augmented_batch)
-            
-            # Compute losses
-            losses = self.model.compute_total_loss(
-                original_batch,
-                augmented_batch,
-                contrastive_weight=self.contrastive_weight,
-                reconstruction_weight=self.reconstruction_weight,
-                epsilon=self.epsilon
+            # Compute loss
+            loss_dict = self.model.compute_total_loss(
+                original_data=original_data,
+                augmented_data=augmented_data,
+                reconstruction_weight=self.reconstruction_weight
             )
             
+            total_loss_batch = loss_dict['total_loss']
+            reconstruction_loss_batch = loss_dict['reconstruction_loss']
+            
             # Backward pass
-            losses['total_loss'].backward()
+            total_loss_batch.backward()
             
             # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             
             # Update parameters
             self.optimizer.step()
             
-            # Update metrics
-            total_loss += losses['total_loss'].item()
-            total_contrastive_loss += losses['contrastive_loss'].item()
-            total_reconstruction_loss += losses['reconstruction_loss'].item()
+            # Accumulate losses
+            total_loss += total_loss_batch.item()
+            total_reconstruction_loss += reconstruction_loss_batch.item()
             num_batches += 1
             
-            # Update progress bar
-            pbar.set_postfix({
-                'Loss': f"{losses['total_loss'].item():.4f}",
-                'Contrastive': f"{losses['contrastive_loss'].item():.4f}",
-                'Reconstruction': f"{losses['reconstruction_loss'].item():.4f}"
+            # Update batch progress bar
+            batch_pbar.set_postfix({
+                'Loss': f'{total_loss_batch.item():.6f}',
+                'Recon': f'{reconstruction_loss_batch.item():.6f}'
             })
-            
-            # Log to wandb
-            if self.use_wandb:
-                wandb.log({
-                    'batch/total_loss': losses['total_loss'].item(),
-                    'batch/contrastive_loss': losses['contrastive_loss'].item(),
-                    'batch/reconstruction_loss': losses['reconstruction_loss'].item(),
-                    'batch/learning_rate': self.optimizer.param_groups[0]['lr']
-                })
         
-        # Update learning rate scheduler
-        self.update_lr_scheduler()
+        batch_pbar.close()
         
-        # Compute average losses
-        avg_losses = {
-            'total_loss': total_loss / num_batches,
-            'contrastive_loss': total_contrastive_loss / num_batches,
-            'reconstruction_loss': total_reconstruction_loss / num_batches
+        # Average losses
+        avg_total_loss = total_loss / num_batches
+        avg_reconstruction_loss = total_reconstruction_loss / num_batches
+        
+        return {
+            'total_loss': avg_total_loss,
+            'reconstruction_loss': avg_reconstruction_loss
         }
-        
-        # Log epoch-level metrics to wandb
-        if self.use_wandb:
-            wandb.log({
-                'epoch/train_total_loss': avg_losses['total_loss'],
-                'epoch/train_contrastive_loss': avg_losses['contrastive_loss'],
-                'epoch/train_reconstruction_loss': avg_losses['reconstruction_loss'],
-                'epoch/learning_rate': self.optimizer.param_groups[0]['lr']
-            })
-        
-        return avg_losses
     
-    
-    def train(self, num_epochs: int, start_epoch: int = 0) -> Dict[str, List[float]]:
-        """Train the model for specified number of epochs"""
+    def train(self, num_epochs: int = 100, save_every: int = 10):
+        """Train the model for multiple epochs"""
         print(f"Starting training for {num_epochs} epochs...")
         print(f"Device: {self.device}")
         print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
         
+        start_time = time.time()
         
-        # Simple epoch loop without an outer tqdm to avoid duplicate bars
-        epoch_indices = range(start_epoch, start_epoch + num_epochs)
-        for epoch in epoch_indices:
-            print(f"\nEpoch {epoch + 1}")
-            print("-" * 50)
-            
-            # Training
-            train_losses = self.train_epoch()
-            self.train_losses.append(train_losses['total_loss'])
-            self.contrastive_losses.append(train_losses['contrastive_loss'])
-            self.reconstruction_losses.append(train_losses['reconstruction_loss'])
-            
-            print(f"Train Loss: {train_losses['total_loss']:.4f}")
-            print(f"Train Contrastive Loss: {train_losses['contrastive_loss']:.4f}")
-            print(f"Train Reconstruction Loss: {train_losses['reconstruction_loss']:.4f}")
-            
-            # Save checkpoint only if loss is better than previous best
-            self.save_checkpoint(current_loss=train_losses['total_loss'])
-            
-            # Print learning rate
-            current_lr = self.get_current_lr()
-            print(f"Learning Rate: {current_lr:.6f}")
-            
-            # No outer tqdm; keep logs concise
-            
-            # Log epoch summary to wandb
-            if self.use_wandb:
-                log_dict = {
-                    'epoch/epoch': epoch + 1,
-                    'epoch/learning_rate': current_lr,
-                    'epoch/train_total_loss': train_losses['total_loss'],
-                    'epoch/train_contrastive_loss': train_losses['contrastive_loss'],
-                    'epoch/train_reconstruction_loss': train_losses['reconstruction_loss']
-                }
-                wandb.log(log_dict)
+        # Create progress bar for epochs
+        epoch_pbar = tqdm(range(num_epochs), desc="Training", unit="epoch")
         
-        print("\nTraining completed!")
+        for epoch in epoch_pbar:
+            epoch_start_time = time.time()
+            
+            # Train one epoch
+            epoch_losses = self.train_epoch()
+            
+            # Store losses
+            self.train_losses.append(epoch_losses['total_loss'])
+            self.reconstruction_losses.append(epoch_losses['reconstruction_loss'])
+            
+            epoch_time = time.time() - epoch_start_time
+            
+            # Update progress bar with current losses
+            epoch_pbar.set_postfix({
+                'Total Loss': f'{epoch_losses["total_loss"]:.6f}',
+                'Recon Loss': f'{epoch_losses["reconstruction_loss"]:.6f}',
+                'Time': f'{epoch_time:.2f}s'
+            })
+            
+            # Save checkpoint
+            if (epoch + 1) % save_every == 0:
+                self.save_checkpoint(epoch + 1)
         
-        # Finish wandb run
-        if self.use_wandb:
-            wandb.finish()
+        epoch_pbar.close()
         
-        return {
-            'train_losses': self.train_losses,
-            'contrastive_losses': self.contrastive_losses,
-            'reconstruction_losses': self.reconstruction_losses
-        }
+        total_time = time.time() - start_time
+        print(f"Training completed in {total_time:.2f}s")
+        
+        # Save final checkpoint
+        self.save_checkpoint(num_epochs, is_final=True)
     
-    def save_checkpoint(self, current_loss: float = None):
-        """Save model checkpoint only if loss is better than previous best"""
-        # If current_loss is provided, check if it's better than best_loss
-        should_save = False
-        if current_loss is not None:
-            if current_loss < self.best_loss:
-                self.best_loss = current_loss
-                should_save = True
-                print(f"New best loss: {current_loss:.4f} (previous: {self.best_loss:.4f})")
-            else:
-                print(f"Loss {current_loss:.4f} not better than best {self.best_loss:.4f}, skipping checkpoint save")
-        else:
-            # If no current_loss provided, save anyway (for final model)
-            should_save = True
-        
-        if not should_save:
-            return
-        
+    def save_checkpoint(self, epoch: int, is_final: bool = False):
+        """Save model checkpoint"""
         checkpoint = {
+            'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler is not None else None,
             'train_losses': self.train_losses,
-            'contrastive_losses': self.contrastive_losses,
             'reconstruction_losses': self.reconstruction_losses,
-            'contrastive_weight': self.contrastive_weight,
-            'reconstruction_weight': self.reconstruction_weight,
-            'best_loss': self.best_loss,
-            # Add window_size for inference compatibility
-            'window_size': getattr(self, 'window_size', None),
-            # Add model architecture parameters for inference
-            'input_dim': self.model.input_dim,
-            'd_model': self.model.d_model,
-            'projection_dim': self.model.projection_dim,
-            'nhead': self.model.nhead,
-            'transformer_layers': self.model.transformer_layers,
-            'tcn_output_dim': self.model.tcn_output_dim,
-            'tcn_kernel_size': self.model.tcn_kernel_size,
-            'tcn_num_layers': self.model.tcn_num_layers,
-            'dropout': self.model.dropout,
-            'temperature': self.model.temperature,
-            'combination_method': self.model.combination_method,
-            'use_contrastive': self.model.use_contrastive,
+            'model_config': {
+                'input_dim': self.model.input_dim,
+                'd_model': self.model.d_model,
+                'dropout': self.model.dropout,
+                'window_size': self.model.window_size,
+                'stacked_tcn_channels': self.model.stacked_tcn_channels,
+                'stacked_tcn_ks_list': self.model.stacked_tcn_ks_list,
+                'stacked_tcn_activation': self.model.stacked_tcn_activation,
+            }
         }
         
-        # Save checkpoint with fixed filename (overwrite previous)
-        checkpoint_path = os.path.join(self.save_dir, 'best_model.pth')
+        if is_final:
+            checkpoint_path = os.path.join(self.save_dir, 'final_checkpoint.pth')
+        else:
+            checkpoint_path = os.path.join(self.save_dir, f'checkpoint_epoch_{epoch}.pth')
+        
         torch.save(checkpoint, checkpoint_path)
-        print(f"Best checkpoint saved: {checkpoint_path} (loss: {self.best_loss:.4f})")
+        print(f"Checkpoint saved to {checkpoint_path}")
     
-    
-    def plot_training_history(self, save_path: Optional[str] = None):
-        """Plot training history"""
-        _, axes = plt.subplots(2, 2, figsize=(15, 10))
+    def load_checkpoint(self, checkpoint_path: str):
+        """Load model checkpoint"""
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
         
-        # Total loss
-        axes[0, 0].plot(self.train_losses, label='Train', color='blue')
-        axes[0, 0].set_title('Total Loss')
-        axes[0, 0].set_xlabel('Epoch')
-        axes[0, 0].set_ylabel('Loss')
-        axes[0, 0].legend()
-        axes[0, 0].grid(True)
+        # Load model state
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         
-        # Contrastive loss
-        axes[0, 1].plot(self.contrastive_losses, label='Train', color='green')
-        axes[0, 1].set_title('Contrastive Loss')
-        axes[0, 1].set_xlabel('Epoch')
-        axes[0, 1].set_ylabel('Loss')
-        axes[0, 1].legend()
-        axes[0, 1].grid(True)
+        # Load training history
+        self.train_losses = checkpoint.get('train_losses', [])
+        self.reconstruction_losses = checkpoint.get('reconstruction_losses', [])
         
-        # Reconstruction loss
-        axes[1, 0].plot(self.reconstruction_losses, label='Train', color='orange')
-        axes[1, 0].set_title('Reconstruction Loss')
-        axes[1, 0].set_xlabel('Epoch')
-        axes[1, 0].set_ylabel('Loss')
-        axes[1, 0].legend()
-        axes[1, 0].grid(True)
-        
-        # Learning rate
-        if self.scheduler is not None:
-            LEARNING_RATE_LABEL = 'Learning Rate'
-            lr_history = [self.scheduler.get_last_lr()[0] for _ in range(len(self.train_losses))]
-            axes[1, 1].plot(lr_history, label=LEARNING_RATE_LABEL, color='purple')
-            axes[1, 1].set_title(LEARNING_RATE_LABEL)
-            axes[1, 1].set_xlabel('Epoch')
-            axes[1, 1].set_ylabel(LEARNING_RATE_LABEL)
-            axes[1, 1].legend()
-            axes[1, 1].grid(True)
-        
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"Training history plot saved to {save_path}")
-        
-        plt.show()
+        print(f"Checkpoint loaded from {checkpoint_path}")
+        return checkpoint['epoch']
 
 
 def create_contrastive_dataloaders(dataset_type: str,
@@ -485,4 +262,49 @@ def create_contrastive_dataloaders(dataset_type: str,
     
     return train_dataloader, None
 
-
+def plot_training_history(self, save_path: Optional[str] = None):
+        """Plot training history"""
+        _, axes = plt.subplots(2, 2, figsize=(15, 10))
+        
+        # Total loss
+        axes[0, 0].plot(self.train_losses, label='Train', color='blue')
+        axes[0, 0].set_title('Total Loss')
+        axes[0, 0].set_xlabel('Epoch')
+        axes[0, 0].set_ylabel('Loss')
+        axes[0, 0].legend()
+        axes[0, 0].grid(True)
+        
+        # Contrastive loss
+        axes[0, 1].plot(self.contrastive_losses, label='Train', color='green')
+        axes[0, 1].set_title('Contrastive Loss')
+        axes[0, 1].set_xlabel('Epoch')
+        axes[0, 1].set_ylabel('Loss')
+        axes[0, 1].legend()
+        axes[0, 1].grid(True)
+        
+        # Reconstruction loss
+        axes[1, 0].plot(self.reconstruction_losses, label='Train', color='orange')
+        axes[1, 0].set_title('Reconstruction Loss')
+        axes[1, 0].set_xlabel('Epoch')
+        axes[1, 0].set_ylabel('Loss')
+        axes[1, 0].legend()
+        axes[1, 0].grid(True)
+        
+        # Learning rate
+        if self.scheduler is not None:
+            LEARNING_RATE_LABEL = 'Learning Rate'
+            lr_history = [self.scheduler.get_last_lr()[0] for _ in range(len(self.train_losses))]
+            axes[1, 1].plot(lr_history, label=LEARNING_RATE_LABEL, color='purple')
+            axes[1, 1].set_title(LEARNING_RATE_LABEL)
+            axes[1, 1].set_xlabel('Epoch')
+            axes[1, 1].set_ylabel(LEARNING_RATE_LABEL)
+            axes[1, 1].legend()
+            axes[1, 1].grid(True)
+        
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"Training history plot saved to {save_path}")
+        
+        plt.show()

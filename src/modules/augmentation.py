@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 import sys
 import os
 
@@ -27,54 +26,25 @@ class LinearAugmentation(nn.Module):
         return y
 
 class MLPAugmentation(nn.Module):
-    """MLP Augmentation with feature flattening"""
-    def __init__(self, input_dim, output_dim, dropout=0.1):
+    """Per-timestep MLP: (B,T,F_in) -> (B,T,F_out)"""
+    def __init__(self, T_fixed, input_dim, output_dim, dropout=0):
         super().__init__()
-        
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-        self.dropout = nn.Dropout(dropout)
-        
-        # Store MLP layers for different flattened sizes
-        self._mlp_cache = {}
+        in_flat  = T_fixed * input_dim
+        out_flat = T_fixed * output_dim
+        # h = hidden or max(in_flat // 2, 64)
+        self.T, self.Fout = T_fixed, output_dim
+        self.net = nn.Sequential(
+            nn.LayerNorm(in_flat),
+            nn.Linear(in_flat, in_flat*2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(in_flat*2, out_flat),
+        )
 
-    def forward(self, x):  # (B,T,F)
-        """
-        Args:
-            x: Input tensor of shape (batch_size, seq_len, input_dim)
-        Returns:
-            Output tensor of shape (batch_size, seq_len, output_dim)
-        """
-        batch_size, seq_len, input_dim = x.shape
-        
-        # Flatten features: (batch_size, seq_len, input_dim) -> (batch_size, seq_len * input_dim)
-        x_flattened = x.view(batch_size, seq_len * input_dim)
-        flattened_size = seq_len * input_dim
-        output_flattened_size = seq_len * self.output_dim
-        
-        # Create or get cached MLP for this flattened size
-        if flattened_size not in self._mlp_cache:
-            dropout_rate = self.dropout.p if hasattr(self.dropout, 'p') else 0.1
-            self._mlp_cache[flattened_size] = nn.Sequential(
-                nn.Linear(flattened_size, flattened_size * 2),  # Expand features
-                nn.GELU(),
-                nn.Dropout(dropout_rate),
-                nn.Linear(flattened_size * 2, flattened_size),  # Compress back
-                nn.GELU(),
-                nn.Dropout(dropout_rate),
-                nn.Linear(flattened_size, output_flattened_size)  # Final output dimension
-            ).to(x.device)
-        
-        mlp = self._mlp_cache[flattened_size]
-        
-        # Apply MLP to flattened features
-        # (batch_size, seq_len * input_dim) -> (batch_size, seq_len * output_dim)
-        output_flattened = mlp(x_flattened)
-        
-        # Reshape back: (batch_size, seq_len * output_dim) -> (batch_size, seq_len, output_dim)
-        output = output_flattened.view(batch_size, seq_len, self.output_dim)
-        
-        return output
+    def forward(self, x):   # x: (B,T,F)
+        B, T, F = x.shape
+        y_flat = self.net(x.reshape(B, T*F))          # (B, T*F_in) -> (B, T*F_out)
+        return y_flat.reshape(B, T, self.Fout)        # (B,T,F_out)
 
 class CNNAugmentation(nn.Module):
     """
@@ -88,6 +58,7 @@ class CNNAugmentation(nn.Module):
             input_dim, output_dim, kernel_size,
             dilation=dilation, causal=False, pad_mode="zeros"
         )
+        self.norm = nn.BatchNorm1d(output_dim)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):  # (B,T,C) hoặc (T,C)
@@ -95,6 +66,7 @@ class CNNAugmentation(nn.Module):
         if single: x = x.unsqueeze(0)
         x = x.transpose(1, 2)              # (B,C,T)
         x = self.conv(x)                   # giữ nguyên T
+        x = self.norm(x)
         x = F.gelu(x)
         x = self.dropout(x)
         x = x.transpose(1, 2)              # (B,T,C_out)
@@ -125,7 +97,7 @@ class Augmentation(nn.Module):
         
         # Initialize all augmentation modules
         self.linear_module = LinearAugmentation(input_dim, desired_output_dim, dropout)
-        self.mlp_module = MLPAugmentation(input_dim, desired_output_dim, dropout)
+        self.mlp_module = MLPAugmentation(window_size, input_dim, desired_output_dim, dropout)
         self.cnn_module = CNNAugmentation(input_dim, desired_output_dim, 
                                         kernel_size=kwargs.get('cnn_kernel_size', 3), 
                                         dropout=dropout)
@@ -161,7 +133,7 @@ class Augmentation(nn.Module):
         # weighted = weighted_flat.reshape(num_aug, bsz, seq_len, feat)   # (3, B, T, D)
         # combined_output = torch.sum(weighted, dim=0)                    # (B, T, D)
         
-        probs = F.gumbel_softmax(self.alpha, tau=self.temperature, hard=True, dim=0)  # (3,)
+        probs = F.gumbel_softmax(self.alpha, tau=self.temperature, hard=False, dim=0)  # (3,)
         weighted = outputs * probs.view(-1, 1, 1, 1)                      # broadcast
         combined_output = weighted.sum(dim=0)  
         

@@ -11,7 +11,6 @@ import sys
 import argparse
 from typing import Dict, Tuple
 import pandas as pd
-import matplotlib.pyplot as plt
 
 # Add project root to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -155,54 +154,29 @@ class ContrastiveInference:
         
         checkpoint = torch.load(model_path, map_location=self.device)
         
-        # Initialize default values
+        # Load model config from checkpoint
+        model_config = checkpoint.get('model_config', {})
         
-        # Load all parameters from checkpoint only
-        self.input_dim = checkpoint.get('input_dim', 2)
-        d_model = checkpoint.get('d_model', 256)
-        projection_dim = checkpoint.get('projection_dim', 128)
-        nhead = checkpoint.get('nhead', 8)
-        transformer_layers = checkpoint.get('transformer_layers', 6)
-        tcn_output_dim = checkpoint.get('tcn_output_dim', None)
-        tcn_kernel_size = checkpoint.get('tcn_kernel_size', 3)
-        tcn_num_layers = checkpoint.get('tcn_num_layers', 3)
-        dropout = checkpoint.get('dropout', 0.1)
-        temperature = checkpoint.get('temperature', 1.0)
-        combination_method = checkpoint.get('combination_method', 'concat')
-        use_contrastive = checkpoint.get('use_contrastive', True)
+        # Load parameters from model_config
+        self.input_dim = model_config.get('input_dim', checkpoint.get('input_dim', 2))
+        d_model = model_config.get('d_model', checkpoint.get('d_model', 256))
+        dropout = model_config.get('dropout', checkpoint.get('dropout', 0.1))
+        window_size = model_config.get('window_size', checkpoint.get('window_size', 16))
+        stacked_tcn_channels = model_config.get('stacked_tcn_channels', None)
+        stacked_tcn_ks_list = model_config.get('stacked_tcn_ks_list', None)
+        stacked_tcn_activation = model_config.get('stacked_tcn_activation', 'gelu')
         
-        # Decoder type is always custom_linear
-        decoder_type = 'custom_linear'
-        
-        # Load window_size from checkpoint if available
-        self.window_size = checkpoint.get('window_size', 16)
-        # Load batch_size from checkpoint if available
+        # Load window_size and batch_size
+        self.window_size = window_size
         self.batch_size = checkpoint.get('batch_size', 32)
         
-        # Load augmentation parameters from checkpoint
-        self.aug_kwargs = {}
-        
-        # Load weights from checkpoint if available
-        self.contrastive_weight = checkpoint.get('contrastive_weight', 1.0)
+        # Load reconstruction weight for inference
         self.reconstruction_weight = checkpoint.get('reconstruction_weight', 1.0)
         
-        # Load other training parameters from checkpoint
-        self.learning_rate = checkpoint.get('learning_rate', 1e-4)
-        self.weight_decay = checkpoint.get('weight_decay', 1e-5)
-        self.epsilon = checkpoint.get('epsilon', 1e-5)
+        # Load mask parameters for inference
         self.mask_mode = checkpoint.get('mask_mode', 'time')
         self.mask_ratio = checkpoint.get('mask_ratio', 0.2)
         self.mask_seed = checkpoint.get('mask_seed', None)
-        self.device_name = checkpoint.get('device', 'cuda')
-        self.seed = checkpoint.get('seed', 42)
-        
-        # Load additional training parameters from checkpoint
-        self.use_lr_scheduler = checkpoint.get('use_lr_scheduler', True)
-        self.scheduler_type = checkpoint.get('scheduler_type', 'cosine')
-        self.scheduler_params = checkpoint.get('scheduler_params', {})
-        self.use_wandb = checkpoint.get('use_wandb', True)
-        self.project_name = checkpoint.get('project_name', 'contrastive-learning')
-        self.experiment_name = checkpoint.get('experiment_name', None)
         
         # Load dataset-specific parameters from checkpoint
         self.dataset_name = checkpoint.get('dataset_name', None)
@@ -212,45 +186,31 @@ class ContrastiveInference:
         print(f"Using input_dim: {self.input_dim}")
         print(f"Using window_size: {self.window_size}")
         print(f"Using batch_size: {self.batch_size}")
-        print(f"Using decoder_type: {decoder_type}")
-        print(f"Using contrastive: {use_contrastive}")
-        print(f"Using learning_rate: {self.learning_rate}")
-        print(f"Using contrastive_weight: {self.contrastive_weight}")
         print(f"Using reconstruction_weight: {self.reconstruction_weight}")
         print(f"Using mask_mode: {self.mask_mode}")
         print(f"Using mask_ratio: {self.mask_ratio}")
-        print(f"Using seed: {self.seed}")
         
         # Create model
         self.model = ContrastiveModel(
             input_dim=self.input_dim,
             d_model=d_model,
-            projection_dim=projection_dim,
-            nhead=nhead,
-            transformer_layers=transformer_layers,
-            tcn_output_dim=tcn_output_dim,
-            tcn_kernel_size=tcn_kernel_size,
-            tcn_num_layers=tcn_num_layers,
             dropout=dropout,
-            temperature=temperature,
-            combination_method=combination_method,
-            use_contrastive=use_contrastive,
             window_size=self.window_size,
-            augmentation_kwargs=self.aug_kwargs if hasattr(self, 'aug_kwargs') else None
+            stacked_tcn_channels=stacked_tcn_channels,
+            stacked_tcn_ks_list=stacked_tcn_ks_list,
+            stacked_tcn_activation=stacked_tcn_activation
         )
         
-        # Initialize bias1 parameters by running a dummy forward pass
-        # This ensures all parameters exist before loading checkpoint
-        print("Initializing augmentation parameters...")
+        # Initialize model parameters by running a dummy forward pass
+        print("Initializing model parameters...")
         self.model.to(self.device)  # Ensure model is on the correct device first
         
-        # Use window_size from checkpoint to create correct bias1 shape
-        window_size = checkpoint.get('window_size', 100)
-        print(f"Using window_size from checkpoint: {window_size}")
-        dummy_input = torch.randn(1, window_size, self.input_dim).to(self.device)
+        # Use window_size from checkpoint to create correct input shape
+        print(f"Using window_size from checkpoint: {self.window_size}")
+        dummy_input = torch.randn(1, self.window_size, self.input_dim).to(self.device)
         with torch.no_grad():
             self.model.eval()
-            # Run forward pass to initialize bias1 parameters
+            # Run forward pass to initialize all parameters
             _ = self.model(dummy_input, dummy_input)
         
         # Load state dict - now all parameters should exist
@@ -897,8 +857,8 @@ class ContrastiveInference:
             best_threshold: Best threshold found (optional)
             save_path: Path to save plot
         """
-        # Create figure with subplots
-        fig, axes = plt.subplots(2, 1, figsize=(15, 10))
+        print("Plotting functionality requires matplotlib. Skipping plot generation.")
+        return
         
         # Plot 1: Test Data vs Reconstruction
         ax1 = axes[0]

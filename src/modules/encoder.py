@@ -1,236 +1,66 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
-
-
-class LearnablePositionalEncoding(nn.Module):
-    """Learnable positional encoding for Transformer"""
-    def __init__(self, d_model: int, window_size: int = 5000):
-        """
-        Args:
-            d_model: Model dimension
-            window_size: Window size for positional encoding
-        """
-        super(LearnablePositionalEncoding, self).__init__()
-        self.d_model = d_model
-        self.window_size = window_size
-        
-        # Learnable positional embeddings
-        self.pos_embedding = nn.Parameter(torch.zeros(window_size, d_model))
-        
-        # Initialize with small random values
-        nn.init.normal_(self.pos_embedding, mean=0.0, std=0.1)
-        
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: Input tensor of shape (batch_size, seq_len, d_model)
-        Returns:
-            Output tensor with positional encoding added
-        """
-        batch_size, seq_len, d_model = x.shape
-        
-        # Ensure we don't exceed window_size
-        if seq_len > self.window_size:
-            raise ValueError(f"Sequence length {seq_len} exceeds window size {self.window_size}")
-        
-        # Get positional embeddings for current sequence length
-        pos_emb = self.pos_embedding[:seq_len, :]  # (seq_len, d_model)
-        
-        # Add positional encoding to input
-        return x + pos_emb.unsqueeze(0)  # (batch_size, seq_len, d_model)
-
-
-class TransformerEncoderBlock(nn.Module):
-    """Transformer Encoder Block with learnable positional encoding"""
-    def __init__(self, d_model, nhead, dim_feedforward, num_layers, dropout=0.1, window_size=5000):
-        super(TransformerEncoderBlock, self).__init__()
-        
-        # Learnable positional encoding
-        self.pos_encoding = LearnablePositionalEncoding(d_model, window_size)
-        
-        # Transformer encoder layers
-        encoder_layer = TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
-            batch_first=True,
-            norm_first=True
-        )
-        self.transformer_encoder = TransformerEncoder(encoder_layer, num_layers=num_layers)
-        
-    def forward(self, x):
-        """
-        Args:
-            x: Input tensor of shape (batch_size, seq_len, d_model)
-        Returns:
-            Output tensor of shape (batch_size, seq_len, d_model)
-        """
-        # Add positional encoding
-        x = self.pos_encoding(x)
-        
-        # Apply transformer encoder
-        return self.transformer_encoder(x)
-
-
-class TCNBlock(nn.Module):
-    """Temporal Convolutional Network Block"""
-    def __init__(self, input_dim, output_dim, kernel_size=3, num_layers=3, dropout=0.1):
-        super(TCNBlock, self).__init__()
-        
-        layers = []
-        for i in range(num_layers):
-            dilation = 2 ** i  # Exponential dilation
-            in_channels = input_dim if i == 0 else output_dim
-            
-            layers.extend([
-                nn.Conv1d(
-                    in_channels, 
-                    output_dim, 
-                    kernel_size, 
-                    padding=(kernel_size-1)*dilation, 
-                    dilation=dilation
-                ),
-                nn.GELU(),
-                nn.Dropout(dropout)
-            ])
-        
-        self.tcn_layers = nn.ModuleList(layers)
-        self.num_layers = num_layers
-        self.kernel_size = kernel_size
-        
-    def forward(self, x):
-        """
-        Args:
-            x: Input tensor of shape (batch_size, seq_len, input_dim)
-        Returns:
-            Output tensor of shape (batch_size, seq_len, output_dim)
-        """
-        # Transpose for Conv1d: (batch_size, input_dim, seq_len)
-        x = x.transpose(1, 2)
-        
-        # Apply TCN layers
-        for i in range(0, len(self.tcn_layers), 3):  # Every 3 layers (Conv1d, GELU, Dropout)
-            conv = self.tcn_layers[i]
-            gelu = self.tcn_layers[i + 1]
-            dropout = self.tcn_layers[i + 2]
-            
-            # Calculate padding to crop
-            dilation = 2 ** (i // 3)
-            padding = (self.kernel_size - 1) * dilation
-            
-            x = conv(x)
-            # Crop to maintain sequence length (crop from end to keep causal behavior)
-            if padding > 0:
-                x = x[:, :, :-padding]
-            x = gelu(x)
-            x = dropout(x)
-        
-        # Transpose back: (batch_size, seq_len, output_dim)
-        return x.transpose(1, 2)
+from .TCN_Module import Stacked_TCN
 
 
 class Encoder(nn.Module):
-    """Encoder with Transformer and TCN blocks"""
+    """Encoder with TCN only"""
     def __init__(self, 
                  input_dim, 
                  d_model, 
-                 nhead=8, 
-                 dim_feedforward=512, 
-                 transformer_layers=6,
-                 tcn_output_dim=None,
-                 tcn_kernel_size=2,
-                 tcn_num_layers=4,
                  dropout=0.1,
-                 combination_method='concat',
-                 window_size=5000):
+                 window_size=5000,
+                 stacked_tcn_channels=None,
+                 stacked_tcn_ks_list=None,
+                 stacked_tcn_activation='gelu'):
         """
         Args:
             input_dim: Input dimension
-            d_model: Model dimension for transformer
-            nhead: Number of attention heads
-            dim_feedforward: Feedforward dimension
-            transformer_layers: Number of transformer encoder layers
-            tcn_output_dim: Output dimension for TCN (default: same as d_model)
-            tcn_kernel_size: Kernel size for TCN
-            tcn_num_layers: Number of TCN layers
+            d_model: Model dimension for output projection
             dropout: Dropout rate
-            combination_method: 'concat' or 'stack' for combining outputs
-            window_size: Window size for positional encoding
+            window_size: Window size for TCN
+            stacked_tcn_channels: Channels for Stacked_TCN
+            stacked_tcn_ks_list: Kernel sizes for Stacked_TCN
+            stacked_tcn_activation: Activation for Stacked_TCN
         """
         super(Encoder, self).__init__()
         
-        # Input projection to d_model
-        self.input_projection = nn.Linear(input_dim, d_model)
+        # Stacked_TCN Block
+        if stacked_tcn_channels is None:
+            stacked_tcn_channels = [d_model//2, d_model]
+        if stacked_tcn_ks_list is None:
+            stacked_tcn_ks_list = [2, 3]
         
-        # Transformer Encoder Block
-        self.transformer_block = TransformerEncoderBlock(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=dim_feedforward,
-            num_layers=transformer_layers,
-            dropout=dropout,
-            window_size=window_size
-        )
-        
-        # TCN Block
-        if tcn_output_dim is None:
-            tcn_output_dim = d_model
-            
-        self.tcn_block = TCNBlock(
-            input_dim=input_dim,  # TCN takes original input
-            output_dim=tcn_output_dim,
-            kernel_size=tcn_kernel_size,
-            num_layers=tcn_num_layers,
+        self.tcn_block = Stacked_TCN(
+            n_dims=input_dim,
+            num_channels=stacked_tcn_channels,
+            activation=stacked_tcn_activation,
+            window_size=window_size,
+            ks_list=stacked_tcn_ks_list,
             dropout=dropout
         )
         
-        # Combination method
-        self.combination_method = combination_method
-        
-        # Output projection if needed
-        if combination_method == 'concat':
-            self.output_projection = nn.Linear(d_model + tcn_output_dim, d_model)
-        elif combination_method == 'stack':
-            # For stack, we will concatenate then project back to d_model
-            self.stack_projection = nn.Linear(d_model + tcn_output_dim, d_model)
-        else:
-            raise ValueError("combination_method must be 'concat' or 'stack'")
+        # Output projection from TCN output (input_dim) to d_model
+        self.output_projection = nn.Linear(input_dim, d_model)
     
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
             x: Input tensor of shape (batch_size, seq_len, input_dim)
         Returns:
-            Combined output tensor
+            Output tensor of shape (batch_size, seq_len, d_model)
         """
-        # Project input to d_model for transformer
-        x_projected = self.input_projection(x)
+        # Transpose input for TCN: (batch_size, seq_len, input_dim) -> (batch_size, input_dim, seq_len)
+        x_transposed = x.transpose(1, 2)  # (batch_size, input_dim, seq_len)
         
-        # Transformer Encoder
-        transformer_output = self.transformer_block(x_projected)  # (batch_size, seq_len, d_model)
+        # Apply TCN
+        tcn_output = self.tcn_block(x_transposed)  # (batch_size, input_dim, seq_len)
         
-        # TCN (uses original input)
-        tcn_output = self.tcn_block(x)  # (batch_size, seq_len, tcn_output_dim)
+        # Transpose back: (batch_size, input_dim, seq_len) -> (batch_size, seq_len, input_dim)
+        tcn_output_transposed = tcn_output.transpose(1, 2)  # (batch_size, seq_len, input_dim)
         
-        # Combine outputs
-        if self.combination_method == 'concat':
-            # Concatenate along feature dimension
-            combined = torch.cat([transformer_output, tcn_output], dim=-1)
-            # Project back to d_model
-            output = self.output_projection(combined)
-            return output
-            
-        elif self.combination_method == 'stack':
-            # Concatenate features and project back to d_model to keep 3D output
-            if tcn_output.size(-1) != transformer_output.size(-1):
-                pad_size = transformer_output.size(-1) - tcn_output.size(-1)
-                tcn_output = F.pad(tcn_output, (0, pad_size))
-            combined = torch.cat([transformer_output, tcn_output], dim=-1)
-            output = self.stack_projection(combined)
-            return output
-    
-
-
+        # Project to d_model
+        output = self.output_projection(tcn_output_transposed)  # (batch_size, seq_len, d_model)
+        
+        return output

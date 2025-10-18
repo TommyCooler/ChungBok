@@ -1,6 +1,5 @@
 import torch.nn as nn
-from .padding import _pad_1d, _same_padding_lr
-
+from src.utils.padding import _pad_1d, _same_padding_lr
 class TemporalConv1d(nn.Module):
     """
     Conv1d thời gian, giữ nguyên T:

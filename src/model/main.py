@@ -32,43 +32,19 @@ def parse_args():
     # Model arguments
     parser.add_argument('--input_dim', type=int, default=None,
                        help='Input dimension (number of features). If not set, auto-detected')
-    parser.add_argument('--d_model', type=int, default=128,
-                       help='Model dimension for transformer')
-    parser.add_argument('--projection_dim', type=int, default=128,
-                       help='Dimension for contrastive learning projection')
-    parser.add_argument('--nhead', type=int, default=4,
-                       help='Number of attention heads')
-    parser.add_argument('--transformer_layers', type=int, default=2,
-                       help='Number of transformer encoder layers')
-    parser.add_argument('--tcn_output_dim', type=int, default=None,
-                       help='Output dimension for TCN')
-    parser.add_argument('--tcn_kernel_size', type=int, default=3,
-                       help='Kernel size for TCN')
-    parser.add_argument('--tcn_num_layers', type=int, default=1,
-                       help='Number of TCN layers')
+    parser.add_argument('--d_model', type=int, default=512,
+                       help='Model dimension for output projection')
     parser.add_argument('--dropout', type=float, default=0.01,
                        help='Dropout rate')
-    parser.add_argument('--temperature', type=float, default=1,
-                       help='Temperature for InfoNCE loss')
-    parser.add_argument('--combination_method', type=str, default='concat',
-                       choices=['concat', 'stack'],
-                       help='Method for combining TCN and Transformer outputs')
     
-    # Decoder is always custom_linear
-
-    # Augmentation-specific overrides (distinct names to avoid confusion with encoder)
-    parser.add_argument('--aug_nhead', type=int, default=2,
-                       help='Augmentation transformer nhead (override; default: model nhead)')
-    parser.add_argument('--aug_num_layers', type=int, default=1,
-                       help='Augmentation transformer number of layers')
-    parser.add_argument('--aug_dropout', type=float, default=0.01,
-                       help='Augmentation dropout (override; default: model dropout)')
-    parser.add_argument('--aug_temperature', type=float, default=None,
-                       help='Augmentation temperature (override; default: model temperature)')
-    parser.add_argument('--use_contrastive', action='store_true', default=False,
-                       help='Use contrastive learning branch')
-    parser.add_argument('--no_contrastive', dest='use_contrastive', action='store_false',
-                       help='Disable contrastive learning branch')
+    # Stacked_TCN arguments
+    parser.add_argument('--stacked_tcn_channels', type=str, default='[128]',
+                       help='Channels for Stacked_TCN (JSON list format)')
+    parser.add_argument('--stacked_tcn_ks_list', type=str, default='[3]',
+                       help='Kernel sizes for Stacked_TCN (JSON list format)')
+    parser.add_argument('--stacked_tcn_activation', type=str, default='gelu',
+                       choices=['relu', 'leak', 'gelu'],
+                       help='Activation function for Stacked_TCN')
     
     # Training arguments
     parser.add_argument('--window_size', type=int, default=16,
@@ -81,12 +57,9 @@ def parse_args():
                        help='Learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-5,
                        help='Weight decay')
-    parser.add_argument('--contrastive_weight', type=float, default=1.0,
-                       help='Weight for contrastive loss')
     parser.add_argument('--reconstruction_weight', type=float, default=1.0,
                        help='Weight for reconstruction loss')
-    parser.add_argument('--epsilon', type=float, default=1e-5,
-                       help='Small constant for numerical stability in contrastive loss')
+    
     # Masking options for training (augmented input masking)
     parser.add_argument('--mask_mode', type=str, default='time', choices=['none', 'time', 'feature'],
                        help='Masking mode for augmented input during training')
@@ -95,26 +68,6 @@ def parse_args():
     parser.add_argument('--mask_seed', type=int, default=None,
                        help='Random seed for masking reproducibility')
     
-    # Wandb arguments
-    parser.add_argument('--use_wandb', action='store_true', default=False,
-                        help='Use wandb for logging')
-    parser.add_argument('--no_wandb', dest='use_wandb', action='store_false',
-                        help='Disable wandb logging')
-    parser.add_argument('--project_name', type=str, default='contrastive-learning',
-                        help='Wandb project name')
-    parser.add_argument('--experiment_name', type=str, default=None,
-                        help='Wandb experiment name')
-# Augmentation is handled by the model, not in dataloader
-    
-    # LR scheduler arguments
-    parser.add_argument('--use_lr_scheduler', action='store_true', default=False,
-                       help='Use learning rate scheduler')
-    parser.add_argument('--scheduler_type', type=str, default='cosine',
-                       choices=['cosine', 'step', 'exponential', 'plateau'],
-                       help='Learning rate scheduler type')
-    parser.add_argument('--scheduler_params', type=str, default='{}',
-                       help='JSON string of scheduler params, e.g. {"T_max": 100, "eta_min": 1e-6}')
-
     # System arguments
     parser.add_argument('--device', type=str, default='cuda',
                        choices=['auto', 'cuda', 'cpu'],
@@ -210,8 +163,6 @@ def main():
     print(f"Batch size: {args.batch_size}")
     print(f"Number of epochs: {args.num_epochs}")
     print(f"Decoder type: custom_linear")
-    print(f"Use contrastive: {args.use_contrastive}")
-    print(f"Use wandb: {args.use_wandb}")
     print(f"Device: {device}")
     print(f"Random seed: {args.seed}")
     print("=" * 60)
@@ -257,29 +208,26 @@ def main():
         except Exception as e:
             print(f"Warning: Could not detect input_dim from dataloader: {e}")
         
+        # Parse JSON arguments for Stacked_TCN
+        import json
+        stacked_tcn_channels = json.loads(args.stacked_tcn_channels) if args.stacked_tcn_channels else None
+        stacked_tcn_ks_list = json.loads(args.stacked_tcn_ks_list) if args.stacked_tcn_ks_list else None
+        
         # Create model
         print(f"\nCreating model with CustomLinear decoder...")
+        print(f"Encoder configuration:")
+        print(f"  - Stacked_TCN channels: {stacked_tcn_channels}")
+        print(f"  - Stacked_TCN kernel sizes: {stacked_tcn_ks_list}")
+        print(f"  - Stacked_TCN activation: {args.stacked_tcn_activation}")
+        
         model = ContrastiveModel(
             input_dim=args.input_dim,
             d_model=args.d_model,
-            projection_dim=args.projection_dim,
-            nhead=args.nhead,
-            transformer_layers=args.transformer_layers,
-            tcn_output_dim=args.tcn_output_dim,
-            tcn_kernel_size=args.tcn_kernel_size,
-            tcn_num_layers=args.tcn_num_layers,
             dropout=args.dropout,
-            temperature=args.temperature,
-            combination_method=args.combination_method,
-            use_contrastive=args.use_contrastive,
             window_size=args.window_size,
-            augmentation_kwargs={
-                # Only pass if provided; ContrastiveModel will fallback to model params
-                **({ 'nhead': args.aug_nhead } if args.aug_nhead is not None else {}),
-                'num_layers': args.aug_num_layers,
-                **({ 'dropout': args.aug_dropout } if args.aug_dropout is not None else {}),
-                **({ 'temperature': args.aug_temperature } if args.aug_temperature is not None else {}),
-            }
+            stacked_tcn_channels=stacked_tcn_channels,
+            stacked_tcn_ks_list=stacked_tcn_ks_list,
+            stacked_tcn_activation=args.stacked_tcn_activation
         )
         
         print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -291,25 +239,16 @@ def main():
             train_dataloader=train_dataloader,
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
-            contrastive_weight=args.contrastive_weight,
             reconstruction_weight=args.reconstruction_weight,
-            epsilon=args.epsilon,
             device=device,
             save_dir=save_dir,
-            use_wandb=args.use_wandb,
-            project_name=args.project_name,
-            experiment_name=args.experiment_name,
-            window_size=args.window_size,
-            use_lr_scheduler=args.use_lr_scheduler,
-            scheduler_type=args.scheduler_type,
-            scheduler_params=(json.loads(args.scheduler_params) if isinstance(args.scheduler_params, str) and args.scheduler_params else {})
+            window_size=args.window_size
         )
         
         # Train model
         print(f"\nStarting training...")
         trainer.train(
             num_epochs=args.num_epochs,
-            start_epoch=0
         )
         
         # Plot training history
