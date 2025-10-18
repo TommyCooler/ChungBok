@@ -174,11 +174,11 @@ class Agf_TCN(nn.Module):
                  activation,
                  fuse_type,
                  window_size,
-                 mode,
+                #  mode,
                  ):
         super(Agf_TCN, self).__init__()
         self.layers = []
-        self.mode = mode
+        # self.mode = mode
         num_levels = len(num_channels)
         for i in range(num_levels):
             dilation_size = 2 ** i
@@ -199,12 +199,12 @@ class Agf_TCN(nn.Module):
                                        output_shape=(num_inputs, 1))
 
         #contrastive learning
-        self.mlp = self._contrastive_mode_setting(mode,num_inputs)
+        # self.mlp = self._contrastive_mode_setting(mode,num_inputs)
 
-    def _contrastive_mode_setting(self, mode,dims):
-        if mode =="train": 
-            return nn.Linear(dims, 128)
-        else: return None
+    # def _contrastive_mode_setting(self, mode,dims):
+    #     if mode =="train": 
+    #         return nn.Linear(dims, 128)
+    #     else: return None
 
     def forward(self, x, generated_labels):
         if self.mode=="train":
